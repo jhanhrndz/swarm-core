@@ -38,7 +38,10 @@ class CameraWorker(threading.Thread):
         if cv2 is None:
             return False
         try:
-            self._cap = cv2.VideoCapture(self.camera_index)
+            if sys.platform == "win32":
+                self._cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+            if self._cap is None or not self._cap.isOpened():
+                self._cap = cv2.VideoCapture(self.camera_index)
             if self._cap.isOpened():
                 self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_size[0])
                 self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.capture_size[1])
@@ -182,9 +185,12 @@ class KioskApp:
 
             if self.screen is not None:
                 self.renderer.render_attract_mode(
-                    self.screen,
-                    self.boids_engine.get_positions(),
-                    self.attract_elapsed
+                    surface=self.screen,
+                    boid_positions=self.boids_engine.get_positions(),
+                    time_elapsed=self.attract_elapsed,
+                    preview_frame=gesture_data.preview_frame,
+                    is_detected=gesture_data.is_detected,
+                    gesture_type=gesture_data.gesture_type
                 )
         else:
             # 5. Modo Misión Activa
@@ -230,6 +236,9 @@ class KioskApp:
                 elif event.key == pygame.K_SPACE:
                     # Conmutar modo reposo
                     self.is_attract_mode = not self.is_attract_mode
+                elif event.key == pygame.K_c:
+                    # Conmutar visualización del cuadro de cámara PiP
+                    self.renderer.show_camera_pip = not self.renderer.show_camera_pip
 
     def run(self) -> None:
         """Bucle principal de ejecución del kiosco."""

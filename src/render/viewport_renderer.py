@@ -42,6 +42,7 @@ class ViewportRenderer:
         self.COLOR_TEXT_MUTED = (120, 150, 180)
 
         self._pulse_timer = 0.0
+        self.show_camera_pip = True  # Control de visibilidad del cuadro de cámara en vivo
 
     def get_gesture_color(self, gesture_type: str) -> Tuple[int, int, int]:
         """Retorna el color reactivo según el gesto clasificado."""
@@ -235,6 +236,63 @@ class ViewportRenderer:
         txt = self.font_large.render(text, True, color)
         surface.blit(txt, (self.width // 2 - txt.get_width() // 2, self.height // 2 - txt.get_height() // 2))
 
+    def render_camera_pip(
+        self,
+        surface: pygame.Surface,
+        preview_frame: Optional[np.ndarray],
+        is_detected: bool,
+        gesture_type: str,
+        show_pip: bool = True
+    ) -> None:
+        """
+        Dibuja el cuadro Picture-in-Picture (PiP) de la cámara en vivo con retroalimentación esquelética.
+        """
+        if not show_pip:
+            return
+
+        pip_w, pip_h = 240, 180
+        pip_x = self.width - pip_w - 30
+        pip_y = 85
+
+        border_color = self.get_gesture_color(gesture_type) if is_detected else (70, 90, 120)
+
+        # 1. Marco exterior translúcido y fondo
+        bg_surface = pygame.Surface((pip_w + 6, pip_h + 30), pygame.SRCALPHA)
+        bg_surface.fill((8, 12, 20, 220))
+        surface.blit(bg_surface, (pip_x - 3, pip_y - 24))
+
+        # 2. Contenido del video de la cámara
+        if preview_frame is not None and preview_frame.shape == (pip_h, pip_w, 3):
+            cam_surface = pygame.surfarray.make_surface(preview_frame.swapaxes(0, 1))
+            surface.blit(cam_surface, (pip_x, pip_y))
+        else:
+            grid_surf = pygame.Surface((pip_w, pip_h))
+            grid_surf.fill((12, 16, 25))
+            for gx in range(0, pip_w, 40):
+                pygame.draw.line(grid_surf, (25, 35, 55), (gx, 0), (gx, pip_h), 1)
+            for gy in range(0, pip_h, 30):
+                pygame.draw.line(grid_surf, (25, 35, 55), (0, gy), (pip_w, gy), 1)
+            surface.blit(grid_surf, (pip_x, pip_y))
+
+            no_cam_lbl = self.font_small.render("BUSCANDO CÁMARA...", True, (255, 160, 40))
+            surface.blit(no_cam_lbl, (pip_x + pip_w // 2 - no_cam_lbl.get_width() // 2, pip_y + pip_h // 2 - 10))
+
+        # 3. Borde de neón cibernético
+        pygame.draw.rect(surface, border_color, (pip_x - 1, pip_y - 1, pip_w + 2, pip_h + 2), 2)
+
+        # 4. Cabecera y estado
+        header_text = "SENSOR ÓPTICO // EN VIVO"
+        hdr_lbl = self.font_small.render(header_text, True, (160, 190, 220))
+        surface.blit(hdr_lbl, (pip_x, pip_y - 20))
+
+        if is_detected:
+            status_text = f"● MANO: {gesture_type}"
+            status_lbl = self.font_small.render(status_text, True, border_color)
+        else:
+            status_text = "○ BUSCANDO MANOS..."
+            status_lbl = self.font_small.render(status_text, True, (150, 150, 150))
+        surface.blit(status_lbl, (pip_x + 4, pip_y + pip_h + 4))
+
     def render_frame(
         self,
         surface: pygame.Surface,
@@ -271,11 +329,23 @@ class ViewportRenderer:
         # 5. Renderizar HUD y telemetría
         self.render_hud(surface, mission_state, gesture_data, fps)
 
+        # 6. Renderizar cuadro Picture-in-Picture de la cámara en vivo
+        self.render_camera_pip(
+            surface=surface,
+            preview_frame=gesture_data.preview_frame,
+            is_detected=gesture_data.is_detected,
+            gesture_type=gesture_data.gesture_type,
+            show_pip=self.show_camera_pip
+        )
+
     def render_attract_mode(
         self,
         surface: pygame.Surface,
         boid_positions: np.ndarray,
-        time_elapsed: float
+        time_elapsed: float,
+        preview_frame: Optional[np.ndarray] = None,
+        is_detected: bool = False,
+        gesture_type: str = 'NONE'
     ) -> None:
         """Modo reposo/demostración para atraer visitantes al tótem en AudacIA."""
         surface.blit(self.fade_surface, (0, 0))
@@ -295,3 +365,12 @@ class ViewportRenderer:
 
         surface.blit(title, (self.width // 2 - title.get_width() // 2, self.height // 2 - 60))
         surface.blit(prompt, (self.width // 2 - prompt.get_width() // 2, self.height // 2 + 10))
+
+        # Mostrar también el cuadro de cámara en vivo durante el modo reposo
+        self.render_camera_pip(
+            surface=surface,
+            preview_frame=preview_frame,
+            is_detected=is_detected,
+            gesture_type=gesture_type,
+            show_pip=self.show_camera_pip
+        )

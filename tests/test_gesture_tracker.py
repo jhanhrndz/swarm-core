@@ -62,3 +62,14 @@ def test_landmark_geometric_gesture_calculation():
         fist_hand[mcp_idx] = (0.5, 0.6, 0.0)
     gesture_fist = tracker.classify_landmarks(fist_hand)
     assert gesture_fist == 'CONDENSE'
+
+def test_gesture_tracker_real_or_tasks_backend():
+    tracker = GestureTracker(use_mock=False)
+    # Probar con un cuadro negro sintético 480x640x3
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    state = tracker.process_frame(frame)
+    assert isinstance(state, HandGestureData)
+    assert state.is_detected is False
+    # preview_frame debe existir (cuadro de previsualización para el cuadro de retroalimentación)
+    assert state.preview_frame is not None
+    assert state.preview_frame.shape == (180, 240, 3)
