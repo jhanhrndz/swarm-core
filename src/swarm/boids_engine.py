@@ -39,20 +39,20 @@ class BoidsEngine:
 
         self.obstacles: List[Tuple[float, float, float]] = []
 
-        # Inicialización de posiciones y velocidades
-        self.positions = np.zeros((self.num_boids, 2), dtype=np.float64)
-        self.velocities = np.zeros((self.num_boids, 2), dtype=np.float64)
+        # Inicialización de posiciones y velocidades en float32 para aceleración SIMD y L2 cache
+        self.positions = np.zeros((self.num_boids, 2), dtype=np.float32)
+        self.velocities = np.zeros((self.num_boids, 2), dtype=np.float32)
         self.reset()
 
     def reset(self) -> None:
         """Reinicia posiciones aleatorias dentro del área y asigna velocidades iniciales."""
         rng = np.random.default_rng()
         margin = 100.0
-        self.positions[:, 0] = rng.uniform(margin, self.width - margin, size=self.num_boids)
-        self.positions[:, 1] = rng.uniform(margin, self.height - margin, size=self.num_boids)
+        self.positions[:, 0] = rng.uniform(margin, self.width - margin, size=self.num_boids).astype(np.float32)
+        self.positions[:, 1] = rng.uniform(margin, self.height - margin, size=self.num_boids).astype(np.float32)
 
-        angles = rng.uniform(0, 2 * np.pi, size=self.num_boids)
-        speeds = rng.uniform(self.min_speed, self.max_speed * 0.5, size=self.num_boids)
+        angles = rng.uniform(0, 2 * np.pi, size=self.num_boids).astype(np.float32)
+        speeds = rng.uniform(self.min_speed, self.max_speed * 0.5, size=self.num_boids).astype(np.float32)
         self.velocities[:, 0] = np.cos(angles) * speeds
         self.velocities[:, 1] = np.sin(angles) * speeds
 
@@ -67,42 +67,50 @@ class BoidsEngine:
         self.obstacles = list(obstacles)
 
     def _compute_reynolds_forces(self) -> np.ndarray:
-        """Cálculo vectorizado de separación, alineación y cohesión sin raíces cuadradas redundantes."""
+        """Cálculo vectorizado de separación, alineación y cohesión optimizado en 2D float32."""
         forces = np.zeros_like(self.positions)
 
-        # Matriz de diferencias por pares: shape (N, N, 2)
-        diff = self.positions[np.newaxis, :, :] - self.positions[:, np.newaxis, :]
-        dist_sq = np.sum(diff * diff, axis=2)  # shape (N, N)
+        # Matrices de diferencia 2D (N, N) en lugar de tensores 3D para residir en L2 cache
+        px = self.positions[:, 0:1]
+        py = self.positions[:, 1:2]
+        dx = px.T - px  # shape (N, N)
+        dy = py.T - py  # shape (N, N)
+        dist_sq = dx * dx + dy * dy
 
         # 1. Separación (usando radio cuadrado)
         r_sep_sq = self.separation_radius * self.separation_radius
         sep_mask = (dist_sq < r_sep_sq) & (dist_sq > 1e-4)
-        inv_dist_sq = np.where(sep_mask, 1.0 / (dist_sq + 1e-5), 0.0)
-        sep_force = -np.sum(diff * inv_dist_sq[:, :, np.newaxis], axis=1)
-        forces += sep_force * self.w_sep * 150.0
+        inv_dist_sq = np.where(sep_mask, 1.0 / (dist_sq + 1e-4), 0.0).astype(np.float32)
+
+        sep_x = -np.sum(dx * inv_dist_sq, axis=1)
+        sep_y = -np.sum(dy * inv_dist_sq, axis=1)
+        forces[:, 0] += sep_x * (self.w_sep * 150.0)
+        forces[:, 1] += sep_y * (self.w_sep * 150.0)
 
         # 2. Cohesión y Alineación (usando radio de percepción cuadrado)
         r_perc_sq = self.perception_radius * self.perception_radius
         neigh_mask = (dist_sq < r_perc_sq) & (dist_sq > 1e-4)
-        neigh_count = np.sum(neigh_mask, axis=1, keepdims=True)  # shape (N, 1)
+        neigh_count = np.sum(neigh_mask, axis=1, keepdims=True)
 
         has_neighbors = (neigh_count[:, 0] > 0)
         if np.any(has_neighbors):
-            # Cohesión: vector hacia el centro de masa local
-            sum_pos = np.sum(self.positions[np.newaxis, :, :] * neigh_mask[:, :, np.newaxis], axis=1)
-            mean_pos = np.zeros_like(self.positions)
-            mean_pos[has_neighbors] = sum_pos[has_neighbors] / neigh_count[has_neighbors]
-            coh_force = np.zeros_like(self.positions)
-            coh_force[has_neighbors] = mean_pos[has_neighbors] - self.positions[has_neighbors]
-            forces += coh_force * self.w_coh * 1.5
+            mask_f32 = neigh_mask.astype(np.float32)
+            # Cohesión
+            sum_pos_x = np.dot(mask_f32, self.positions[:, 0])
+            sum_pos_y = np.dot(mask_f32, self.positions[:, 1])
+            counts = np.maximum(neigh_count[:, 0], 1.0)
+            mean_pos_x = sum_pos_x / counts
+            mean_pos_y = sum_pos_y / counts
+            forces[has_neighbors, 0] += (mean_pos_x[has_neighbors] - self.positions[has_neighbors, 0]) * (self.w_coh * 1.5)
+            forces[has_neighbors, 1] += (mean_pos_y[has_neighbors] - self.positions[has_neighbors, 1]) * (self.w_coh * 1.5)
 
-            # Alineación: vector hacia la velocidad promedio local
-            sum_vel = np.sum(self.velocities[np.newaxis, :, :] * neigh_mask[:, :, np.newaxis], axis=1)
-            mean_vel = np.zeros_like(self.velocities)
-            mean_vel[has_neighbors] = sum_vel[has_neighbors] / neigh_count[has_neighbors]
-            ali_force = np.zeros_like(self.velocities)
-            ali_force[has_neighbors] = mean_vel[has_neighbors] - self.velocities[has_neighbors]
-            forces += ali_force * self.w_ali * 1.2
+            # Alineación
+            sum_vel_x = np.dot(mask_f32, self.velocities[:, 0])
+            sum_vel_y = np.dot(mask_f32, self.velocities[:, 1])
+            mean_vel_x = sum_vel_x / counts
+            mean_vel_y = sum_vel_y / counts
+            forces[has_neighbors, 0] += (mean_vel_x[has_neighbors] - self.velocities[has_neighbors, 0]) * (self.w_ali * 1.2)
+            forces[has_neighbors, 1] += (mean_vel_y[has_neighbors] - self.velocities[has_neighbors, 1]) * (self.w_ali * 1.2)
 
         return forces
 
