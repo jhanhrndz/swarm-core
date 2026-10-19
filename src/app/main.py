@@ -91,7 +91,7 @@ class KioskApp:
 
     def __init__(
         self,
-        resolution: Tuple[int, int] = (1920, 1080),
+        resolution: Optional[Tuple[int, int]] = None,
         fullscreen: bool = False,
         fps_cap: int = 60,
         mock_camera: bool = False,
@@ -100,7 +100,10 @@ class KioskApp:
         idle_timeout: float = 15.0,
         camera_index: int = 0
     ):
-        self.width, self.height = resolution
+        self.virtual_width = 1920
+        self.virtual_height = 1080
+        self.width = self.virtual_width
+        self.height = self.virtual_height
         self.fullscreen = fullscreen
         self.fps_cap = fps_cap
         self.mock_camera = mock_camera
@@ -113,24 +116,55 @@ class KioskApp:
         self.idle_timer = 0.0
         self.attract_elapsed = 0.0
 
-        # Submódulos del sistema
+        # Submódulos del sistema (operan en el espacio virtual 1920x1080)
         self.gesture_tracker = GestureTracker(use_mock=mock_camera)
-        self.boids_engine = BoidsEngine(num_boids=num_boids, bounds=resolution)
-        self.mission_director = MissionDirector(total_time=180.0, bounds=resolution)
+        self.boids_engine = BoidsEngine(num_boids=num_boids, bounds=(self.width, self.height))
+        self.mission_director = MissionDirector(total_time=180.0, bounds=(self.width, self.height))
 
-        # Pygame y Renderizador
+        # Pygame, Lienzo Virtual y Renderizador
         self.screen: Optional[pygame.Surface] = None
+        self.virtual_surface: Optional[pygame.Surface] = None
         self.clock: Optional[pygame.time.Clock] = None
+        self.window_size: Tuple[int, int] = (self.width, self.height)
 
         if not self.headless:
             if not pygame.get_init():
                 pygame.init()
-            flags = pygame.FULLSCREEN if self.fullscreen else 0
-            self.screen = pygame.display.set_mode((self.width, self.height), flags)
+
+            display_info = pygame.display.Info()
+            disp_w = display_info.current_w if display_info.current_w > 0 else 1920
+            disp_h = display_info.current_h if display_info.current_h > 0 else 1080
+
+            if self.fullscreen:
+                win_w = disp_w
+                win_h = disp_h
+                flags = pygame.FULLSCREEN
+            else:
+                if resolution is not None:
+                    req_w, req_h = resolution
+                    # Si la resolución solicitada excede la pantalla del portátil, ajustar para evitar desborde
+                    if req_w >= disp_w or req_h >= disp_h:
+                        if disp_w <= 1600 or disp_h <= 900:
+                            win_w, win_h = 1280, 720
+                        else:
+                            win_w, win_h = 1600, 900
+                    else:
+                        win_w, win_h = req_w, req_h
+                else:
+                    # En modo ventana por defecto: resolución 720p 16:9 para asegurar que quepa 100% en portátiles
+                    if disp_w <= 1600 or disp_h <= 900:
+                        win_w, win_h = 1280, 720
+                    else:
+                        win_w, win_h = 1600, 900
+                flags = 0
+
+            self.window_size = (win_w, win_h)
+            self.screen = pygame.display.set_mode(self.window_size, flags)
             pygame.display.set_caption("SwarmCore // AudacIA AI & Robotics")
             self.clock = pygame.time.Clock()
+            self.virtual_surface = pygame.Surface((self.virtual_width, self.virtual_height))
 
-        self.renderer = ViewportRenderer(resolution=resolution)
+        self.renderer = ViewportRenderer(resolution=(self.width, self.height))
 
         # Hilo de cámara
         self.camera_worker: Optional[CameraWorker] = None
@@ -175,6 +209,8 @@ class KioskApp:
         # 3. Actualizar temporizador de inactividad
         self.update_lifecycle(dt, gesture_data.is_detected)
 
+        render_target = self.virtual_surface if self.screen is not None else None
+
         # 4. Modo Reposo (Attract Mode)
         if self.is_attract_mode:
             self.attract_elapsed += dt
@@ -183,9 +219,9 @@ class KioskApp:
             ly = self.height * 0.5 + math.cos(self.attract_elapsed * 1.3) * (self.height * 0.3)
             self.boids_engine.step(dt, hand_targets=[(lx, ly, 'ATTRACT')])
 
-            if self.screen is not None:
+            if render_target is not None:
                 self.renderer.render_attract_mode(
-                    surface=self.screen,
+                    surface=render_target,
                     boid_positions=self.boids_engine.get_positions(),
                     time_elapsed=self.attract_elapsed,
                     preview_frame=gesture_data.preview_frame,
@@ -206,19 +242,23 @@ class KioskApp:
             boid_pos = self.boids_engine.step(dt, hand_targets)
             mission_state = self.mission_director.update(dt, boid_pos, gesture_data)
 
-            if self.screen is not None:
+            if render_target is not None:
                 fps_val = self.clock.get_fps() if self.clock is not None else 60.0
                 self.renderer.render_frame(
-                    self.screen,
-                    boid_pos,
-                    self.boids_engine.get_velocities(),
-                    mission_state,
-                    gesture_data,
+                    surface=render_target,
+                    boid_positions=boid_pos,
+                    boid_velocities=self.boids_engine.get_velocities(),
+                    mission_state=mission_state,
+                    gesture_data=gesture_data,
                     fps=fps_val,
                     dt=dt
                 )
 
-        if self.screen is not None:
+        if self.screen is not None and self.virtual_surface is not None:
+            if self.screen.get_size() == (self.virtual_width, self.virtual_height):
+                self.screen.blit(self.virtual_surface, (0, 0))
+            else:
+                pygame.transform.scale(self.virtual_surface, self.screen.get_size(), self.screen)
             pygame.display.flip()
 
     def handle_events(self) -> None:
@@ -239,6 +279,22 @@ class KioskApp:
                 elif event.key == pygame.K_c:
                     # Conmutar visualización del cuadro de cámara PiP
                     self.renderer.show_camera_pip = not self.renderer.show_camera_pip
+                elif event.key in (pygame.K_f, pygame.K_F11):
+                    # Alternar pantalla completa
+                    self.fullscreen = not self.fullscreen
+                    if not self.headless and pygame.display.get_init():
+                        display_info = pygame.display.Info()
+                        disp_w = display_info.current_w if display_info.current_w > 0 else 1920
+                        disp_h = display_info.current_h if display_info.current_h > 0 else 1080
+                        if self.fullscreen:
+                            self.window_size = (disp_w, disp_h)
+                            self.screen = pygame.display.set_mode(self.window_size, pygame.FULLSCREEN)
+                        else:
+                            if disp_w <= 1600 or disp_h <= 900:
+                                self.window_size = (1280, 720)
+                            else:
+                                self.window_size = (1600, 900)
+                            self.screen = pygame.display.set_mode(self.window_size, 0)
 
     def run(self) -> None:
         """Bucle principal de ejecución del kiosco."""
@@ -264,17 +320,21 @@ class KioskApp:
 
 def main():
     parser = argparse.ArgumentParser(description="SwarmCore - Juego Interactivo de Visión Artificial para AudacIA")
-    parser.add_argument("--fullscreen", action="store_true", help="Ejecutar en pantalla completa 1080p")
+    parser.add_argument("--fullscreen", action="store_true", help="Ejecutar en pantalla completa nativa")
     parser.add_argument("--mock-camera", action="store_true", help="Ejecutar sin cámara física (modo simulación)")
     parser.add_argument("--fps", type=int, default=60, help="Límite de cuadros por segundo (default: 60)")
     parser.add_argument("--boids", type=int, default=350, help="Número de microrobots en el enjambre (default: 350)")
     parser.add_argument("--camera-idx", type=int, default=0, help="Índice de la cámara USB (default: 0)")
-    parser.add_argument("--width", type=int, default=1920, help="Ancho de resolución")
-    parser.add_argument("--height", type=int, default=1080, help="Alto de resolución")
+    parser.add_argument("--width", type=int, default=None, help="Ancho de ventana personalizado")
+    parser.add_argument("--height", type=int, default=None, help="Alto de ventana personalizado")
     args = parser.parse_args()
 
+    custom_res = None
+    if args.width is not None and args.height is not None:
+        custom_res = (args.width, args.height)
+
     app = KioskApp(
-        resolution=(args.width, args.height),
+        resolution=custom_res,
         fullscreen=args.fullscreen,
         fps_cap=args.fps,
         mock_camera=args.mock_camera,

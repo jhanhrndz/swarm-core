@@ -65,3 +65,22 @@ def test_render_attract_mode_headless():
     renderer.render_attract_mode(surface, positions, time_elapsed=10.0)
     arr = pygame.surfarray.array3d(surface)
     assert np.any(arr > 0)
+
+def test_render_camera_pip_adaptive_positioning():
+    renderer = ViewportRenderer(resolution=(1920, 1080))
+    # Probar tanto en superficie 1920x1080 como en 1280x720
+    for w, h in [(1920, 1080), (1280, 720)]:
+        surface = pygame.Surface((w, h))
+        dummy_preview = np.ones((180, 240, 3), dtype=np.uint8) * 128
+
+        renderer.render_camera_pip(
+            surface=surface,
+            preview_frame=dummy_preview,
+            is_detected=True,
+            gesture_type='ATTRACT',
+            show_pip=True
+        )
+
+        arr = pygame.surfarray.array3d(surface)
+        assert np.any(arr > 0)
+

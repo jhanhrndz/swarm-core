@@ -246,52 +246,64 @@ class ViewportRenderer:
     ) -> None:
         """
         Dibuja el cuadro Picture-in-Picture (PiP) de la cámara en vivo con retroalimentación esquelética.
+        Se posiciona de forma adaptativa según el ancho de la superficie dada.
         """
         if not show_pip:
             return
 
         pip_w, pip_h = 240, 180
-        pip_x = self.width - pip_w - 30
+        surf_w, surf_h = surface.get_size()
+        pip_x = surf_w - pip_w - 30
         pip_y = 85
 
         border_color = self.get_gesture_color(gesture_type) if is_detected else (70, 90, 120)
 
         # 1. Marco exterior translúcido y fondo
-        bg_surface = pygame.Surface((pip_w + 6, pip_h + 30), pygame.SRCALPHA)
-        bg_surface.fill((8, 12, 20, 220))
-        surface.blit(bg_surface, (pip_x - 3, pip_y - 24))
+        bg_surface = pygame.Surface((pip_w + 12, pip_h + 46), pygame.SRCALPHA)
+        bg_surface.fill((8, 12, 22, 230))
+        surface.blit(bg_surface, (pip_x - 6, pip_y - 20))
 
-        # 2. Contenido del video de la cámara
-        if preview_frame is not None and preview_frame.shape == (pip_h, pip_w, 3):
-            cam_surface = pygame.surfarray.make_surface(preview_frame.swapaxes(0, 1))
-            surface.blit(cam_surface, (pip_x, pip_y))
-        else:
+        # 2. Cabecera superior
+        header_text = "SENSOR ÓPTICO // EN VIVO"
+        hdr_lbl = self.font_small.render(header_text, True, (160, 190, 220))
+        surface.blit(hdr_lbl, (pip_x, pip_y - 18))
+
+        # 3. Contenido del video de la cámara
+        if preview_frame is not None and preview_frame.ndim == 3:
+            try:
+                if preview_frame.shape[:2] == (pip_h, pip_w):
+                    cam_surface = pygame.surfarray.make_surface(preview_frame.swapaxes(0, 1))
+                else:
+                    # Si tiene dimensiones distintas, convertir y redimensionar con Pygame
+                    temp_surf = pygame.surfarray.make_surface(preview_frame.swapaxes(0, 1))
+                    cam_surface = pygame.transform.scale(temp_surf, (pip_w, pip_h))
+                surface.blit(cam_surface, (pip_x, pip_y + 4))
+            except Exception:
+                preview_frame = None
+
+        if preview_frame is None or preview_frame.ndim != 3:
             grid_surf = pygame.Surface((pip_w, pip_h))
             grid_surf.fill((12, 16, 25))
             for gx in range(0, pip_w, 40):
                 pygame.draw.line(grid_surf, (25, 35, 55), (gx, 0), (gx, pip_h), 1)
             for gy in range(0, pip_h, 30):
                 pygame.draw.line(grid_surf, (25, 35, 55), (0, gy), (pip_w, gy), 1)
-            surface.blit(grid_surf, (pip_x, pip_y))
+            surface.blit(grid_surf, (pip_x, pip_y + 4))
 
             no_cam_lbl = self.font_small.render("BUSCANDO CÁMARA...", True, (255, 160, 40))
-            surface.blit(no_cam_lbl, (pip_x + pip_w // 2 - no_cam_lbl.get_width() // 2, pip_y + pip_h // 2 - 10))
+            surface.blit(no_cam_lbl, (pip_x + pip_w // 2 - no_cam_lbl.get_width() // 2, pip_y + 4 + pip_h // 2 - 10))
 
-        # 3. Borde de neón cibernético
-        pygame.draw.rect(surface, border_color, (pip_x - 1, pip_y - 1, pip_w + 2, pip_h + 2), 2)
+        # 4. Borde cibernético neón alrededor del video
+        pygame.draw.rect(surface, border_color, (pip_x - 1, pip_y + 3, pip_w + 2, pip_h + 2), 2)
 
-        # 4. Cabecera y estado
-        header_text = "SENSOR ÓPTICO // EN VIVO"
-        hdr_lbl = self.font_small.render(header_text, True, (160, 190, 220))
-        surface.blit(hdr_lbl, (pip_x, pip_y - 20))
-
+        # 5. Estado y clasificación del gesto debajo del video
         if is_detected:
             status_text = f"● MANO: {gesture_type}"
             status_lbl = self.font_small.render(status_text, True, border_color)
         else:
             status_text = "○ BUSCANDO MANOS..."
             status_lbl = self.font_small.render(status_text, True, (150, 150, 150))
-        surface.blit(status_lbl, (pip_x + 4, pip_y + pip_h + 4))
+        surface.blit(status_lbl, (pip_x, pip_y + pip_h + 8))
 
     def render_frame(
         self,
