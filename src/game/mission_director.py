@@ -17,7 +17,7 @@ class MissionState:
     swarm_integrity: float = 1.0
     fuse_pos: Tuple[float, float] = (500.0, 540.0)
     phase_title: str = "FASE 1: NAVEGACIÓN Y EVASIÓN"
-    phase_instruction: str = "Guía al enjambre con la palma abierta hacia el portal esquivando el calor"
+    phase_instruction: str = "Apunta con 1 DEDO para guiar el enjambre hacia el portal | Abre la palma para esquivar calor"
 
 class MissionDirector:
     """
@@ -214,9 +214,9 @@ class MissionDirector:
             5: "MISIÓN FALLIDA"
         }
         instructions = {
-            1: "Guía al enjambre con la palma abierta hacia el portal de la derecha",
-            2: "Usa tus dos manos para dividir el enjambre y alimentar ambos nodos a la vez",
-            3: "Cierra el puño (CONDENSAR) sobre el fusible para empujarlo al reactor",
+            1: "Apunta con 1 DEDO para guiar el enjambre hacia el portal | Abre la palma para esquivar calor",
+            2: "Usa 2 MANOS (1 dedo en cada una) para dividir el enjambre al 50% y alimentar ambos nodos",
+            3: "Cierra el PUÑO (CONDENSAR) sobre el fusible para concentrar el enjambre y empujarlo al reactor",
             4: "¡Reactor reactivado exitosamente! Excelente trabajo en equipo",
             5: "El reactor colapsó. Vuelve a intentarlo para salvar AudacIA"
         }

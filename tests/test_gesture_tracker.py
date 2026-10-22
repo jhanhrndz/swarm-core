@@ -63,8 +63,15 @@ def test_landmark_geometric_gesture_calculation():
     gesture_fist = tracker.classify_landmarks(fist_hand)
     assert gesture_fist == 'CONDENSE'
 
+    # Simulate pointing with index (index finger up, others curled in fist)
+    point_hand = list(fist_hand)
+    point_hand[8] = (0.5, 0.1, 0.0)
+    gesture_point = tracker.classify_landmarks(point_hand)
+    assert gesture_point == 'ATTRACT'
+
 def test_gesture_tracker_real_or_tasks_backend():
     tracker = GestureTracker(use_mock=False)
+    assert tracker.backend in ("tasks", "solutions")
     # Probar con un cuadro negro sintético 480x640x3
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     state = tracker.process_frame(frame)
@@ -73,3 +80,17 @@ def test_gesture_tracker_real_or_tasks_backend():
     # preview_frame debe existir (cuadro de previsualización para el cuadro de retroalimentación)
     assert state.preview_frame is not None
     assert state.preview_frame.shape == (180, 240, 3)
+
+def test_gesture_tracker_detects_real_hand():
+    import os, cv2
+    sample_path = os.path.join(os.path.dirname(__file__), "sample_hand.jpg")
+    if os.path.exists(sample_path):
+        tracker = GestureTracker(use_mock=False)
+        assert tracker.backend == "tasks"
+        img = cv2.imread(sample_path)
+        state = tracker.process_frame(img)
+        assert state.is_detected is True
+        assert state.hand_count >= 1
+        assert state.gesture_type in ('ATTRACT', 'DISPERSE', 'CONDENSE')
+        assert state.preview_frame is not None
+

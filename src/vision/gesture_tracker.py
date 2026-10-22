@@ -7,10 +7,23 @@ import numpy as np
 
 try:
     import cv2
-    import mediapipe as mp
 except ImportError:
     cv2 = None
+
+try:
+    import mediapipe as mp
+except ImportError:
     mp = None
+
+mp_vision = None
+mp_BaseOptions = None
+if mp is not None:
+    try:
+        from mediapipe.tasks.python import vision as mp_vision
+        from mediapipe.tasks.python.core.base_options import BaseOptions as mp_BaseOptions
+    except (ImportError, AttributeError):
+        mp_vision = None
+        mp_BaseOptions = None
 
 @dataclass
 class HandGestureData:
@@ -61,12 +74,9 @@ class GestureTracker:
         self.solutions_detector = None
         self.tasks_landmarker = None
 
-        if not self.use_mock and mp is not None:
+        if not self.use_mock:
             # 1. Intentar backend moderno MediaPipe Tasks (HandLandmarker)
-            if hasattr(mp, 'tasks') and hasattr(mp.tasks, 'python') and hasattr(mp.tasks.python, 'vision'):
-                vision = mp.tasks.python.vision
-                BaseOptions = mp.tasks.BaseOptions
-
+            if mp_vision is not None and mp_BaseOptions is not None:
                 # Resolver ruta del modelo
                 candidates = [
                     model_path,
@@ -82,21 +92,21 @@ class GestureTracker:
 
                 if resolved_model:
                     try:
-                        options = vision.HandLandmarkerOptions(
-                            base_options=BaseOptions(model_asset_path=resolved_model),
-                            running_mode=vision.RunningMode.IMAGE,
+                        options = mp_vision.HandLandmarkerOptions(
+                            base_options=mp_BaseOptions(model_asset_path=resolved_model),
+                            running_mode=mp_vision.RunningMode.IMAGE,
                             num_hands=2,
                             min_hand_detection_confidence=min_detection_confidence,
                             min_hand_presence_confidence=min_detection_confidence,
                             min_tracking_confidence=min_tracking_confidence
                         )
-                        self.tasks_landmarker = vision.HandLandmarker.create_from_options(options)
+                        self.tasks_landmarker = mp_vision.HandLandmarker.create_from_options(options)
                         self.backend = "tasks"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[GestureTracker] Error al inicializar Tasks: {e}")
 
             # 2. Fallback a MediaPipe Solutions legacy si está disponible
-            if self.backend == "none" and hasattr(mp, 'solutions') and hasattr(mp.solutions, 'hands'):
+            if self.backend == "none" and mp is not None and hasattr(mp, 'solutions') and hasattr(mp.solutions, 'hands'):
                 try:
                     self.solutions_detector = mp.solutions.hands.Hands(
                         static_image_mode=False,
@@ -106,8 +116,8 @@ class GestureTracker:
                         min_tracking_confidence=min_tracking_confidence
                     )
                     self.backend = "solutions"
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[GestureTracker] Error al inicializar Solutions: {e}")
 
     def set_mock_state(
         self,
@@ -132,12 +142,17 @@ class GestureTracker:
     def classify_landmarks(self, landmarks: List[Tuple[float, float, float]]) -> str:
         """
         Determina el tipo de gesto a partir de los 21 landmarks normalizados.
+        Gestos intuitivos y sin ambigüedad:
+          - ☝️ 'ATTRACT': 1 dedo arriba / apuntando (índice extendido, demás encogidos).
+          - 🖐️ 'DISPERSE': Palma abierta (4 o 5 dedos extendidos).
+          - ✊ 'CONDENSE': Puño cerrado (0 dedos extendidos).
         """
         if len(landmarks) < 21:
             return 'NONE'
 
         wrist = landmarks[0]
 
+        # Índices de los 4 dedos principales: (MCP, TIP)
         finger_pairs = [
             (5, 8),    # Índice
             (9, 12),   # Medio
@@ -145,41 +160,48 @@ class GestureTracker:
             (17, 20)   # Meñique
         ]
 
-        extended_fingers = 0
-        curled_fingers = 0
-
+        extended = []
         for mcp_idx, tip_idx in finger_pairs:
             mcp = landmarks[mcp_idx]
             tip = landmarks[tip_idx]
-
             d_wrist_tip = math.dist((wrist[0], wrist[1]), (tip[0], tip[1]))
             d_wrist_mcp = math.dist((wrist[0], wrist[1]), (mcp[0], mcp[1]))
 
-            if d_wrist_mcp > 1e-4:
-                ratio = d_wrist_tip / d_wrist_mcp
-                if ratio > 1.25:
-                    extended_fingers += 1
-                elif ratio < 1.05:
-                    curled_fingers += 1
+            # Dedo extendido si la punta dista de la muñeca sustancialmente más que el nudillo
+            is_ext = d_wrist_tip > (d_wrist_mcp * 1.25)
+            extended.append(is_ext)
 
-        # Detección del pulgar (landmarks 2 MCP y 4 TIP)
+        # Pulgar (2=MCP, 4=TIP)
         thumb_tip = landmarks[4]
         thumb_mcp = landmarks[2]
         d_wrist_thumb_tip = math.dist((wrist[0], wrist[1]), (thumb_tip[0], thumb_tip[1]))
         d_wrist_thumb_mcp = math.dist((wrist[0], wrist[1]), (thumb_mcp[0], thumb_mcp[1]))
-        if d_wrist_thumb_mcp > 1e-4:
-            thumb_ratio = d_wrist_thumb_tip / d_wrist_thumb_mcp
-            if thumb_ratio > 1.2:
-                extended_fingers += 1
-            elif thumb_ratio < 1.05:
-                curled_fingers += 1
+        thumb_ext = d_wrist_thumb_tip > (d_wrist_thumb_mcp * 1.15)
 
-        if extended_fingers >= 4:
+        idx_ext, mid_ext, ring_ext, pinky_ext = extended
+        total_extended = sum(extended) + (1 if thumb_ext else 0)
+
+        # 1. DISPERSE: Palma completamente abierta (4 o 5 dedos extendidos)
+        if total_extended >= 4:
             return 'DISPERSE'
-        elif curled_fingers >= 4:
+
+        # 2. CONDENSE: Puño cerrado (0 dedos extendidos, o todos los 4 dedos principales encogidos)
+        if total_extended == 0 or (not idx_ext and not mid_ext and not ring_ext and not pinky_ext):
             return 'CONDENSE'
-        else:
+
+        # 3. ATTRACT: Dedo arriba / apuntar con el índice (índice extendido, anular y meñique encogidos)
+        if idx_ext and not ring_ext and not pinky_ext:
             return 'ATTRACT'
+
+        # Si hay 1 o 2 dedos extendidos en total, cuenta como ATTRACT (apuntar)
+        if total_extended in (1, 2):
+            return 'ATTRACT'
+
+        # Para 3 dedos extendidos (gesto intermedio): si el índice está arriba, es ATTRACT
+        if idx_ext:
+            return 'ATTRACT'
+
+        return 'DISPERSE'
 
     def _apply_hysteresis(self, raw_gesture: str) -> str:
         """Filtro temporal para eliminar jitter entre fotogramas sucesivos."""
@@ -197,17 +219,20 @@ class GestureTracker:
         self,
         preview_bgr: np.ndarray,
         all_landmarks: List[List[Tuple[float, float, float]]],
-        gesture: str
+        hands_list: List[Dict[str, Any]],
+        fallback_gesture: str
     ) -> np.ndarray:
-        """Dibuja las conexiones y puntos clave de las manos sobre la previsualización."""
+        """Dibuja las conexiones y puntos clave de las manos sobre la previsualización con etiquetas claras."""
         h, w, _ = preview_bgr.shape
-        color_bgr = (255, 240, 0)  # Cyan BGR (0, 240, 255) -> (255, 240, 0)
-        if gesture == 'DISPERSE':
-            color_bgr = (0, 170, 255)  # Ámbar BGR
-        elif gesture == 'CONDENSE':
-            color_bgr = (255, 0, 190)  # Magenta BGR
 
-        for landmarks in all_landmarks:
+        for i, landmarks in enumerate(all_landmarks):
+            gesture = hands_list[i]['gesture'] if i < len(hands_list) else fallback_gesture
+            color_bgr = (255, 240, 0)  # Cyan BGR (ATTRACT)
+            if gesture == 'DISPERSE':
+                color_bgr = (0, 170, 255)  # Ámbar BGR
+            elif gesture == 'CONDENSE':
+                color_bgr = (255, 0, 190)  # Magenta BGR
+
             pts = [(int(lm[0] * w), int(lm[1] * h)) for lm in landmarks]
 
             # Dibujar huesos
@@ -218,6 +243,20 @@ class GestureTracker:
             # Dibujar nodos articulares
             for pt in pts:
                 cv2.circle(preview_bgr, pt, 3, color_bgr, -1)
+
+            # Etiqueta corta sobre cada mano en el cuadro de cámara
+            wrist_pt = pts[0]
+            label = "1-DEDO" if gesture == 'ATTRACT' else ("PALMA" if gesture == 'DISPERSE' else "PUNO")
+            cv2.putText(
+                preview_bgr,
+                label,
+                (max(5, wrist_pt[0] - 20), min(h - 6, wrist_pt[1] + 16)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color_bgr,
+                1,
+                cv2.LINE_AA
+            )
 
         # Convertir a RGB para Pygame
         return cv2.cvtColor(preview_bgr, cv2.COLOR_BGR2RGB)
@@ -305,6 +344,7 @@ class GestureTracker:
         annotated_preview = self._draw_skeleton_on_preview(
             preview_base,
             all_hands_landmarks,
+            hands_list,
             filtered_gesture
         )
 

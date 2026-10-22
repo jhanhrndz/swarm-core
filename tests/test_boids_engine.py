@@ -74,3 +74,20 @@ def test_boids_inertia_when_no_hands():
     # Speeds should be positive and bounded by max_speed
     assert np.all(speeds > 0.0)
     assert np.all(speeds <= engine.max_speed)
+
+def test_boids_bimanual_50_50_split():
+    engine = BoidsEngine(num_boids=100, bounds=(2000.0, 1000.0))
+    # Place all boids in center (1000, 500)
+    engine.positions[:] = [1000.0, 500.0]
+    engine.velocities[:, :] = 0.0
+
+    # Two hands on opposite sides: left (200, 500), right (1800, 500)
+    targets = [(200.0, 500.0, 'ATTRACT'), (1800.0, 500.0, 'ATTRACT')]
+    for _ in range(25):
+        engine.step(dt=0.03, hand_targets=targets)
+
+    # Verify that the swarm splits: exactly half goes left, half goes right
+    left_boids = np.sum(engine.positions[:, 0] < 1000.0)
+    right_boids = np.sum(engine.positions[:, 0] > 1000.0)
+    assert left_boids == 50
+    assert right_boids == 50

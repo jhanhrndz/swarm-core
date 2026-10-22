@@ -236,6 +236,61 @@ class ViewportRenderer:
         txt = self.font_large.render(text, True, color)
         surface.blit(txt, (self.width // 2 - txt.get_width() // 2, self.height // 2 - txt.get_height() // 2))
 
+    def render_hand_reticles(self, surface: pygame.Surface, gesture_data: HandGestureData) -> None:
+        """Dibuja cursores y retículas holográficas reactivas en pantalla para cada mano detectada."""
+        if not gesture_data.is_detected or not gesture_data.hands:
+            return
+
+        pulse = (math.sin(self._pulse_timer * 6.0) + 1.0) * 0.5
+        num_hands = len(gesture_data.hands)
+        is_two_hands = num_hands > 1
+
+        # Si hay dos manos, trazar enlace visual que muestra la división del enjambre
+        if is_two_hands:
+            p1 = (int(gesture_data.hands[0]['x'] * self.width), int(gesture_data.hands[0]['y'] * self.height))
+            p2 = (int(gesture_data.hands[1]['x'] * self.width), int(gesture_data.hands[1]['y'] * self.height))
+            pygame.draw.line(surface, (50, 90, 140), p1, p2, 1)
+
+        for i, h in enumerate(gesture_data.hands):
+            hx = int(h['x'] * self.width)
+            hy = int(h['y'] * self.height)
+            g_type = h['gesture']
+            color = self.get_gesture_color(g_type)
+
+            r_outer = int(32 + pulse * 6.0)
+            r_inner = 8
+
+            # Anillo exterior reactivo
+            pygame.draw.circle(surface, color, (hx, hy), r_outer, 2)
+            # Punto central
+            pygame.draw.circle(surface, color, (hx, hy), r_inner, 0)
+
+            # Cruz holográfica
+            pygame.draw.line(surface, color, (hx - r_outer - 6, hy), (hx - r_inner - 2, hy), 2)
+            pygame.draw.line(surface, color, (hx + r_inner + 2, hy), (hx + r_outer + 6, hy), 2)
+            pygame.draw.line(surface, color, (hx, hy - r_outer - 6), (hx, hy - r_inner - 2), 2)
+            pygame.draw.line(surface, color, (hx, hy + r_inner + 2), (hx, hy + r_outer + 6), 2)
+
+            # Etiqueta clara del gesto
+            if g_type == 'ATTRACT':
+                tag = "1 DEDO [ATRAER]"
+            elif g_type == 'DISPERSE':
+                tag = "PALMA [DISPERSAR]"
+            elif g_type == 'CONDENSE':
+                tag = "PUNO [CONDENSAR]"
+            else:
+                tag = g_type
+
+            if is_two_hands:
+                tag = f"MANO {i+1} (50%): {tag}"
+
+            lbl = self.font_small.render(tag, True, color)
+            # Caja de fondo oscura para lectura fácil sobre partículas
+            lbl_bg = pygame.Surface((lbl.get_width() + 10, lbl.get_height() + 4), pygame.SRCALPHA)
+            lbl_bg.fill((8, 12, 22, 220))
+            surface.blit(lbl_bg, (hx - lbl.get_width() // 2 - 5, hy + r_outer + 6))
+            surface.blit(lbl, (hx - lbl.get_width() // 2, hy + r_outer + 8))
+
     def render_camera_pip(
         self,
         surface: pygame.Surface,
@@ -264,7 +319,7 @@ class ViewportRenderer:
         surface.blit(bg_surface, (pip_x - 6, pip_y - 20))
 
         # 2. Cabecera superior
-        header_text = "SENSOR ÓPTICO // EN VIVO"
+        header_text = "SENSOR OPTICO // EN VIVO"
         hdr_lbl = self.font_small.render(header_text, True, (160, 190, 220))
         surface.blit(hdr_lbl, (pip_x, pip_y - 18))
 
@@ -290,7 +345,7 @@ class ViewportRenderer:
                 pygame.draw.line(grid_surf, (25, 35, 55), (0, gy), (pip_w, gy), 1)
             surface.blit(grid_surf, (pip_x, pip_y + 4))
 
-            no_cam_lbl = self.font_small.render("BUSCANDO CÁMARA...", True, (255, 160, 40))
+            no_cam_lbl = self.font_small.render("BUSCANDO CAMARA...", True, (255, 160, 40))
             surface.blit(no_cam_lbl, (pip_x + pip_w // 2 - no_cam_lbl.get_width() // 2, pip_y + 4 + pip_h // 2 - 10))
 
         # 4. Borde cibernético neón alrededor del video
@@ -298,7 +353,14 @@ class ViewportRenderer:
 
         # 5. Estado y clasificación del gesto debajo del video
         if is_detected:
-            status_text = f"● MANO: {gesture_type}"
+            if gesture_type == 'ATTRACT':
+                status_text = "● 1 DEDO: ATRAER"
+            elif gesture_type == 'DISPERSE':
+                status_text = "● PALMA: DISPERSAR"
+            elif gesture_type == 'CONDENSE':
+                status_text = "● PUNO: CONDENSAR"
+            else:
+                status_text = f"● MANO: {gesture_type}"
             status_lbl = self.font_small.render(status_text, True, border_color)
         else:
             status_text = "○ BUSCANDO MANOS..."
@@ -338,10 +400,13 @@ class ViewportRenderer:
         # 4. Renderizar boids con color reactivo
         self.render_boids(surface, boid_positions, boid_velocities, gesture_data.gesture_type)
 
-        # 5. Renderizar HUD y telemetría
+        # 5. Renderizar retículas holográficas de las manos (posiciones en pantalla y división 50/50)
+        self.render_hand_reticles(surface, gesture_data)
+
+        # 6. Renderizar HUD y telemetría
         self.render_hud(surface, mission_state, gesture_data, fps)
 
-        # 6. Renderizar cuadro Picture-in-Picture de la cámara en vivo
+        # 7. Renderizar cuadro Picture-in-Picture de la cámara en vivo
         self.render_camera_pip(
             surface=surface,
             preview_frame=gesture_data.preview_frame,

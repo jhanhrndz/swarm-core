@@ -120,30 +120,71 @@ class BoidsEngine:
         if not hand_targets:
             return forces
 
-        for target in hand_targets:
-            hx, hy, gesture = target
-            hand_pos = np.array([hx, hy], dtype=np.float64)
+        attractors = [t for t in hand_targets if t[2] in ('ATTRACT', 'CONDENSE')]
+        dispersers = [t for t in hand_targets if t[2] == 'DISPERSE']
 
-            diff = hand_pos - self.positions  # Vector hacia la mano
+        # 1. Atractores (Mano única o División Bimanual 50/50)
+        if attractors:
+            if len(attractors) == 1:
+                hx, hy, gesture = attractors[0]
+                hand_pos = np.array([hx, hy], dtype=np.float32)
+                diff = hand_pos - self.positions
+                dist = np.linalg.norm(diff, axis=1, keepdims=True) + 1e-5
+                direction = diff / dist
+
+                if gesture == 'ATTRACT':
+                    attract_mag = np.clip(dist * 2.0, 60.0, 650.0)
+                    forces += direction * attract_mag * self.w_attract
+                else:  # CONDENSE
+                    condense_mag = np.clip(dist * 3.5, 180.0, 1100.0)
+                    forces += direction * condense_mag * self.w_condense
+            else:
+                # 2 o más atractores: Dividir el enjambre equitativamente (50% a cada mano)
+                all_diffs = []
+                all_dists = []
+                for hx, hy, _ in attractors:
+                    h_pos = np.array([hx, hy], dtype=np.float32)
+                    diff = h_pos - self.positions
+                    dist = np.linalg.norm(diff, axis=1) + 1e-5
+                    all_diffs.append(diff)
+                    all_dists.append(dist)
+
+                if len(attractors) == 2:
+                    diff_d = all_dists[0] - all_dists[1]
+                    sort_idx = np.argsort(diff_d)
+                    split_idx = self.num_boids // 2
+                    assigned = np.zeros(self.num_boids, dtype=np.int32)
+                    assigned[sort_idx[split_idx:]] = 1
+                else:
+                    dist_matrix = np.column_stack(all_dists)
+                    assigned = np.argmin(dist_matrix, axis=1)
+
+                for k, (hx, hy, gesture) in enumerate(attractors):
+                    mask = (assigned == k)
+                    if not np.any(mask):
+                        continue
+                    diff_k = all_diffs[k][mask]
+                    dist_k = all_dists[k][mask, np.newaxis]
+                    direction_k = diff_k / dist_k
+
+                    if gesture == 'ATTRACT':
+                        attract_mag = np.clip(dist_k * 2.5, 120.0, 750.0)
+                        forces[mask] += direction_k * attract_mag * (self.w_attract * 1.5)
+                    else:  # CONDENSE
+                        condense_mag = np.clip(dist_k * 4.0, 250.0, 1200.0)
+                        forces[mask] += direction_k * condense_mag * (self.w_condense * 1.4)
+
+        # 2. Dispersores (DISPERSE): Onda expansiva radial que afecta a cualquier boid en rango
+        for hx, hy, _ in dispersers:
+            hand_pos = np.array([hx, hy], dtype=np.float32)
+            diff = hand_pos - self.positions
             dist = np.linalg.norm(diff, axis=1, keepdims=True) + 1e-5
             direction = diff / dist
 
-            if gesture == 'ATTRACT':
-                # Atracción suave proporcional a distancia, con amortiguamiento cercano
-                attract_mag = np.clip(dist * 1.5, 50.0, 500.0)
-                forces += direction * attract_mag * self.w_attract
-
-            elif gesture == 'DISPERSE':
-                # Repulsión radial fuerte dentro de un radio de influencia
-                influence_r = 450.0
-                in_range = (dist < influence_r).astype(np.float64)
-                repel_mag = (influence_r - dist) / influence_r * 800.0
-                forces -= direction * repel_mag * in_range * self.w_disperse
-
-            elif gesture == 'CONDENSE':
-                # Máxima atracción concentrada hacia la mano para formar masa densa
-                condense_mag = np.clip(dist * 3.0, 150.0, 1000.0)
-                forces += direction * condense_mag * self.w_condense
+            influence_r = 450.0
+            in_range = (dist < influence_r).astype(np.float32)
+            repel_mag = (influence_r - dist) / influence_r * 850.0
+            forces -= direction * repel_mag * in_range * self.w_disperse
 
         return forces
 
